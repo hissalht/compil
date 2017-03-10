@@ -213,6 +213,23 @@ expr returns [String code, String type]
         $type = "int";
       }
 
+    //funtion
+    | IDENTIFIANT '(' args ')'
+      {
+        $code = "";
+        AdresseType at = tablesSymboles.getFonction($IDENTIFIANT.text);
+        //Variable de retour
+        if(at.type.equals("float")){
+            $code += "PUSHF 0.0\n";
+        }else{
+            $code += "PUSHI 0\n";
+        }
+        //arguments de la fonction
+        $code = $args.code;
+        //appel de la fonction
+        $code = "CALL " + at.adresse + "\n";
+      }
+
     //values
     | FLOTTANT {$code = "PUSHF " + $FLOTTANT.text + "\n"; $type = "float";}
     | ENTIER   {$code = "PUSHI " + $ENTIER.text + "\n"; $type = "int";}
@@ -224,12 +241,17 @@ expr returns [String code, String type]
         /*$code = "PUSHG " + at.adresse + "\n";*/
 
         AdresseType at = tablesSymboles.getAdresseType($IDENTIFIANT.text);
+        String pushCode = "PUSHG ";
+        // si la variable est locale
+        if(at.adresse < 0){
+            pushCode = "PUSHL ";
+        }
         $type = at.type;
         if($type.equals("int")){
-            $code = "PUSHL " + at.adresse + "\n";
+            $code = pushCode + at.adresse + "\n";
         }else if($type.equals("float")){
-            $code = "PUSHL " + at.adresse + "\n" +      //première partie du flottant
-                    "PUSHL " + (at.adresse+1) + "\n";   //deuxième partie du flottant
+            $code = pushCode + at.adresse + "\n" +      //première partie du flottant
+                    pushCode + (at.adresse+1) + "\n";   //deuxième partie du flottant
         }
       }
     ;
@@ -284,6 +306,12 @@ instruction returns [String code]
     | boucle
       {
         $code = $boucle.code;
+      }
+    | RETURN expr finInstruction
+      {
+        $code = $expr.code;
+        $code += "RETURN\n";
+        $code += "RETURN\n";
       }
     | finInstruction
       {
@@ -357,14 +385,78 @@ boucle returns [String code]
     /*;*/
 
 
+fonction returns [ String code ]
+    : TYPE IDENTIFIANT '('  params ? ')'
+        {
+            // truc à faire par rapport au "type" de la fonction
+            int label = nextLabel();
+            tablesSymboles.nouvelleFonction($IDENTIFIANT.text, label, $TYPE.text);
+            $code = "LABEL " + label + "\n";
+        }
+        instruction
+        {
+            // corps de la fonction
+            $code += $instruction.code;
+
+            tablesSymboles.dropTableLocale();
+        }
+    ;
+
+
+params
+    : TYPE IDENTIFIANT
+        {
+            tablesSymboles.newTableLocale();
+            tablesSymboles.putVar($IDENTIFIANT.text, $TYPE.text);
+
+        }
+        ( ',' TYPE IDENTIFIANT
+            {
+                tablesSymboles.putVar($IDENTIFIANT.text, $TYPE.text);
+            }
+        )*
+    ;
+
+ // init nécessaire à cause du ? final et donc args peut être vide (mais $args sera non null)
+args returns [ String code, int size] @init{ $code = new String(); $size = 0; }
+    : ( expr
+    {
+        $code += $expr.code;
+        if($expr.type.equals("float"))
+            $size += 2;
+        else
+            $size += 1;
+        // code java pour première expression pour arg1
+    }
+    ( ',' expr
+    {
+        $code += $expr.code;
+        if($expr.type.equals("float"))
+            $size += 2;
+        else
+            $size += 1;
+        // code java pour expression suivante pour argi
+    }
+    )*
+      )?
+    ;
+
+
 calcul returns [String code]
 @init{ $code = new String(); }
 @after{ System.out.println($code); }
     : (decl { $code += $decl.code; })*
-
-      {$code += "#fin declarations\n";}
-
+      {
+        int entry = nextLabel();
+        $code += "#fin declarations\nJUMP " + entry + "\n";
+        $code += "#debut des fonctions\n";
+      }
       NEWLINE*
+
+      (fonction {$code += $fonction.code; })*
+      NEWLINE*
+
+      { $code += "#Fin des fonctions\nLABEL " + entry + "\n"; }
 
       (instruction { $code += $instruction.code; } )*
 
@@ -386,6 +478,7 @@ FALSE : 'false';
 AND : 'and';
 OR : 'or';
 NOT : 'not';
+RETURN : 'return';
 REL_OP : '==' | '!=' | '<>' | '<' | '>' | '<=' | '>=';
 NEWLINE : '\r'? '\n';
 IDENTIFIANT : ('a'..'z'|'A'..'Z')('a'..'z'|'A'..'Z'|'0'..'9')*;
